@@ -6,7 +6,6 @@ from shlex import split
 import argparse
 
 argparser = argparse.ArgumentParser(description="Send a command either to all pis or all but this one. Make sure to place the command in quotes")
-#find_lim_group = argparser.add_mutually_exclusive_group()
 
 argparser.add_argument('command', help="the command to be executed on the pis")
 argparser.add_argument('-s', '--serial', action='store_true', help="execute commands in serial. default is parallel")
@@ -34,19 +33,9 @@ if __name__ == '__main__':
 		if args.all:
 			numProcs = 4
 		for x in range(2,5):
-			#r, w = Pipe(duplex=False)
-			#readers.append(r)
 			p = Process(target=send_command, args=(x, args.command,))
 			p.start()
-			#w.close()
 		if args.all:
 			print("Executing on pi01...")
 			call(split(args.command))
-		#while readers:
-		#	for r in wait(readers):
-		#		try:
-		#			msg = r.recv()
-		#		except EOFError:
-		#			readers.remove(r)
-		#		else:
-		#			print(msg)
+
