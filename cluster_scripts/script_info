@@ -1,0 +1,3 @@
+Note: these scripts only function in conjunction with ssh configured to name the pis pi01, pi02, pi03, pi04.
+If any other setup is used, the scripts will need to be modified to match. It wouldn't be hard to make this
+a little more extensible, but it isn't a pressing matter
