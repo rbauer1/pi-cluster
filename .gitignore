@@ -1,0 +1,12 @@
+# binaries
+*.o
+
+# text files
+*.txt
+
+# epubs (ebooks)
+*.epub
+
+# xml files (come from unzipping epub)
+*.xml
+

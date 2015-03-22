@@ -1,3 +1,5 @@
+/* With a lot of help from www.linux-mag.com/id/1332/ */
+
 #include <mpi.h>
 #include <stdio.h>
 #include <string.h>
@@ -19,6 +21,7 @@ void printTally(Tally *t, int num_tally){
         printf("%s : %d\n", t[i].word, t[i].num);
     }
 }
+
 
 
 int main(void){
