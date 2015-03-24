@@ -42,15 +42,17 @@ int test(){
             }
         }
     }
+    int num_objs = 0;
     //hash->debug(hash, stdout);
     qhashtbl_obj_t obj;
     //must be cleared before call
     memset((void*) &obj, 0, sizeof(obj));
     while (hash->getnext(hash, &obj, true)){
-        printf("%s:%s\n", obj.name, (char*)obj.data);
+        printf("%s:%s num_objs:%d\n", obj.name, (char*)obj.data, ++num_objs);
         free(obj.name);
         free(obj.data);
     }
+    printf("hash->size(hash) = %d\n",(int)hash->size(hash));
     return 0;
 }
 
