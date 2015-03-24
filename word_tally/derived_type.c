@@ -31,7 +31,7 @@ int tallyCmp(const void *a , const void*b){
     return strcasecmp((*(Tally*)a).word, (*(Tally*)b).word);
 }
 
-void merge(MPI_Datatype tally_type){
+void mergeTallies(MPI_Datatype tally_type){
         //these could be more flexibly allocated using mpi-probe in a real
         //application
         Tally tal[TALLIES], other_tal[TALLIES];
@@ -175,7 +175,7 @@ int main(void){
         printf("\n");
         MPI_Send(other_tal, TALLIES, tally_type, 2, 0, MPI_COMM_WORLD);
 
-        merge(tally_type);
+        mergeTallies(tally_type);
     }else{
         //receive the Tally array and print contents for verification
         MPI_Recv(tal, TALLIES, tally_type, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
