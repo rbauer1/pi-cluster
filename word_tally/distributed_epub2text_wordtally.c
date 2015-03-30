@@ -3,7 +3,7 @@
 #include <qlibc/containers/qhashtbl.h> //used for qhashtbl_t
 #include <mpi.h> //used for mpi calls
 #include <string.h> //used for strcpy
-#include <unistd.h>
+#include <unistd.h> //used for unzip() (I think.)
 #include <dirent.h> //used for counting files
 #include <strings.h> //for strcasecmp()
 #include <stdlib.h> //for qsort() (and more?)
@@ -11,8 +11,10 @@
 /* technically longest commonly accepted word is 45 letters, however, for
  * everything to include marry poppins we'd use 34. this number will likely
  * have a large impact on memory usage, so a more realistic number like 15 or
- * 20 is probably sufficient*/
-#define WORD_LEN 25
+ * 20 is probably sufficient. Note that the struct will be padded to the
+ * nearest 4 bytes. This means that since num is an int, so 4 bytes, using
+ * anything number that is not a multiple of 4 for WORD_LEN is wasting space*/
+#define WORD_LEN 24
 
 static const int LINE_LEN = 80;
 
@@ -104,7 +106,8 @@ int unzip(char *path){
 
     if (childpid == 0){
         //Child will handle unzipping the file
-        execl("/usr/bin/unzip", "unzip", path, "OPS/main*", (char*) NULL);
+        printf("NOTE!!! if extracted files already exist here, this will NOT overwrite them!!!\n");
+        execl("/usr/bin/unzip", "unzip", "-n", path, "OPS/main*", (char*) NULL);
     }else{
         //parent waits for child to finish before continuing
         wait(NULL);
@@ -200,7 +203,7 @@ void mergeTallies(Tally *tal, int n_tal, Tally *oth_tal, int n_oth_tal){
         FILE *out_file = fopen("words.txt", "w");
 
         if (out_file == NULL){
-            printf("Error opening out_file. Aborting.");
+            printf("Error opening out_file. Aborting.\n");
             return;
         }
 
@@ -219,14 +222,14 @@ void mergeTallies(Tally *tal, int n_tal, Tally *oth_tal, int n_oth_tal){
 
 //---------------------------------------------------------------------------
 
-int readAndSendFile(int n_files, int world_size){
+int readAndSendFileLoop(int n_files, int world_size){
     const int MAX_LINE_LEN = 256;
     const int MAX_LINES = 4096;
-
+    double time_s, time_e;
     int i;
-    for(i = 0; i<n_files; i++){
+    char *file_buffer = (char*)malloc(sizeof(char)*MAX_LINE_LEN*MAX_LINES);
+    for(i = 1; i<n_files+1; i++){
 
-        char *file_buffer = (char*)malloc(sizeof(char)*MAX_LINE_LEN*MAX_LINES);
         int n_lines = 0;
         /*  NOTE: this doesn't actually need to be an array.
             it is helpful because it allows each line to be accessed if need be
@@ -237,21 +240,20 @@ int readAndSendFile(int n_files, int world_size){
         int line_start_index[MAX_LINES];
 
         //length of filename (should allow for 9999 pages)
-        char p[17];
+        char file_name[17];
 
-        //makes p into equivalent of "OPS/main"+i+".xml"
-        snprintf(p, sizeof(p), "%s%d%s", "OPS/main",i,".xml\0");
+        //makes file_name into equivalent of "OPS/main"+i+".xml"
+        snprintf(file_name, sizeof(file_name), "%s%d%s", "OPS/main",i,".xml\0");
 
-        FILE *file_reader = fopen(p, "rt");
+        FILE *file_reader = fopen(file_name, "rt");
 
         if (file_reader == NULL){
-            printf("Error opening in_file. Aborting.");
+            printf("Error opening %s Aborting.\n", file_name);
             //fclose(out_file);
             return -1;
         }
 
-        char line[MAX_LINE_LEN], text[MAX_LINE_LEN];
-        int stillOpen = 0;
+        char line[MAX_LINE_LEN];
         while (fgets(line, MAX_LINE_LEN, file_reader) != NULL){
             strcpy(file_buffer + line_start_index[n_lines], line);
             int len = strlen(line);
@@ -259,14 +261,18 @@ int readAndSendFile(int n_files, int world_size){
             line_start_index[n_lines] = line_start_index[n_lines-1] + len + 1;
         }
 
-        printf("send buffer size = %d\n", line_start_index[n_lines]);
-
+        //printf("send buffer size = %d\n", line_start_index[n_lines]);
+        time_s = MPI_Wtime();
         MPI_Send(file_buffer, line_start_index[n_lines], MPI_CHAR, (i%(world_size-1))+1, 0, MPI_COMM_WORLD);
+        time_e = MPI_Wtime();
+        printf("Time to send (file %d), size %dB, to (proc %d) is %f\n", i, line_start_index[n_lines], (i%(world_size-1))+1, time_e-time_s);
 
         //clean up
         fclose(file_reader);
-        free(file_buffer);
     }
+
+    free(file_buffer);
+
     return 0;
 }
 
@@ -293,7 +299,10 @@ int countFiles(char *path){
 
 //---------------------------------------------------------------------------
 
-int convertFile2Plaintext(MPI_Datatype tally_t, char *buffer, int buffer_size, MPI_Comm com, int world_rank){
+int convertFile2Plaintext(MPI_Datatype tally_t, char *buffer, int buffer_size, int world_rank){
+    double time_s, time_e;
+    time_s = MPI_Wtime();
+
     //create hashtable
     qhashtbl_t *hash = qhashtbl(1000,0);
 
@@ -364,9 +373,13 @@ int convertFile2Plaintext(MPI_Datatype tally_t, char *buffer, int buffer_size, M
     //sort this process's Tally array
     qsort(tally, num_tallies, sizeof(Tally), tallyCmp);
 
+    time_e = MPI_Wtime();
+
+    printf("(proc %d) time to convert and sort file: %fs\n", world_rank, time_e-time_s);
+
     if ( world_rank % 2 == 0 ){
 
-        MPI_Send(tally, num_tallies, tally_t, world_rank+1, world_rank, com);
+        MPI_Send(tally, num_tallies, tally_t, world_rank+1, world_rank, MPI_COMM_WORLD);
                                 //******************************************************************************************
                                 //******************************************************************************************
                                 //******************************************************************************************
@@ -381,10 +394,10 @@ int convertFile2Plaintext(MPI_Datatype tally_t, char *buffer, int buffer_size, M
         MPI_Status status;
 
         //check how large the incoming Tally array is
-        MPI_Probe(world_rank-1, world_rank-1, com, &status);
+        MPI_Probe(world_rank-1, world_rank-1, MPI_COMM_WORLD, &status);
         MPI_Get_count(&status, tally_t, &n_inc_tallies);
         Tally inc_tallies[n_inc_tallies];
-        MPI_Recv(inc_tallies, n_inc_tallies, tally_t, world_rank-1, world_rank-1, com, &status);
+        MPI_Recv(inc_tallies, n_inc_tallies, tally_t, world_rank-1, world_rank-1, MPI_COMM_WORLD, &status);
         /* next 5 lines are a check, might not be necessary */
         int n_recvd_tallies;
         MPI_Get_count(&status, tally_t, &n_recvd_tallies);
@@ -393,7 +406,11 @@ int convertFile2Plaintext(MPI_Datatype tally_t, char *buffer, int buffer_size, M
             printf("Wanted %d, got %d\n", n_inc_tallies, n_recvd_tallies);
             return -1;
         }
+        time_s = MPI_Wtime();
         mergeTallies(tally, num_tallies, inc_tallies, n_inc_tallies);
+        time_e = MPI_Wtime();
+
+        printf("(proc %d) time to merge files: %fs\n", world_rank, time_e-time_s);
 
     }
 
@@ -403,21 +420,91 @@ int convertFile2Plaintext(MPI_Datatype tally_t, char *buffer, int buffer_size, M
 
 //---------------------------------------------------------------------------
 
+void workerLoop(MPI_Datatype tally_t, int world_rank, int world_size){
+    int buffer_size, old_buffer_size = -1;
+    MPI_Status status;
+    char *incoming_file;
+
+    //find out how big file_buffer is using this and next call
+    MPI_Probe(0,0, MPI_COMM_WORLD, &status);
+
+    //get file_buffer size and store in buffer_size
+    MPI_Get_count(&status, MPI_CHAR, &buffer_size);
+
+    //printf("recv buffer_size = %d\n", buffer_size);
+
+    if (buffer_size < 0){
+        printf("Error: buffer_size = %d\n", buffer_size);
+        //TODO add some kind of error handling
+        return;
+    }
+
+    if (old_buffer_size == -1){
+        incoming_file = (char*)malloc(sizeof(char) * buffer_size);
+    }else if (buffer_size > old_buffer_size){
+        //double the requested size. might be too much
+        incoming_file = (char*)realloc(incoming_file, buffer_size*2);
+    }
+    if (incoming_file == NULL){
+        //TODO add error handling
+        return;
+    }
+
+
+    MPI_Recv(incoming_file, buffer_size, MPI_CHAR, 0, 0, MPI_COMM_WORLD, &status);
+
+    //incoming_file[25] = '\0';
+
+    //MPI_Get_count(&status, MPI_CHAR, &buffer_size);
+
+    //printf("pi: %d msg_len: %d msg: %s tally_t: %d\n", world_rank, buffer_size, incoming_file, &tally_t);
+
+    convertFile2Plaintext(tally_t, incoming_file, buffer_size, world_rank);
+
+    old_buffer_size = buffer_size;
+
+    free(incoming_file);
+
+}
+
+//---------------------------------------------------------------------------
+
 int main(int argc, char* argv[]){
 
+    /* TODO there are multiple other functions that return -1 on errors. These
+     * need to actually be handled in the case of that they return -1, as
+     * currently, the functions that call them don't actually check their
+     * returns*/
     if (argc < 2){
         printf("Usage: run [path/to/epub]\n");
         return -1;
     }
 
+
+    int world_rank, world_size, name_length;
+    char hostname[MPI_MAX_PROCESSOR_NAME];
+
     MPI_Init(NULL, NULL);
 
-    int world_rank, world_size;
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+    MPI_Get_processor_name(hostname, &name_length);
 
-    printf("Hello from pi %d, process: %ld\n", world_rank, (long)getpid());
+    /* Check if mpi world time clocks are synchronized.
+     * 1 if they are, 0 if they aren't.
+     * (they are not for this system)
+    void *global;
+    int f;
+    MPI_Attr_get(MPI_COMM_WORLD, MPI_WTIME_IS_GLOBAL, &global, &f);
+    printf("%d %d ---  %p synchronized? %d\n", world_rank, MPI_WTIME_IS_GLOBAL, global, *((int*)global));
+    */
 
+    double start_time, end_time;
+    //use barrier to sync times to degree possible (?)
+    //MPI_Barrier(MPI_COMM_WORLD);
+    start_time = MPI_Wtime();
+
+    printf("Hello from %s, processor %d, process: %ld\n", hostname, world_rank, (long)getpid());
 
     //setup mpi derived type "Tally" used to transmit individual results
     MPI_Datatype tally_t;
@@ -432,55 +519,27 @@ int main(int argc, char* argv[]){
         int n_files = countFiles("./OPS/");
         printf("Number of files: %d\n", n_files);
 
-        readAndSendFile(3, world_size);
+        readAndSendFileLoop(3, world_size);
 
         //is this needed? (another below)
         //MPI_Barrier(MPI_COMM_WORLD);
 
     }else{
-
-        int buffer_size;
-        MPI_Status status;
-        char *incoming_file;
-
-        //find out how big file_buffer is using this and next call
-        MPI_Probe(0,0, MPI_COMM_WORLD, &status);
-
-        //get file_buffer size and store in buffer_size
-        MPI_Get_count(&status, MPI_CHAR, &buffer_size);
-
-        printf("recv buffer_size = %d\n", buffer_size);
-
-        if (buffer_size < 0){
-            printf("Error: buffer_size = %d\n", buffer_size);
-            return -1;
-        }
-
-        incoming_file = (char*)malloc(sizeof(char) * buffer_size);
-
-        MPI_Recv(incoming_file, buffer_size, MPI_CHAR, 0, 0, MPI_COMM_WORLD, &status);
-
-        //incoming_file[25] = '\0';
-
-        //MPI_Get_count(&status, MPI_CHAR, &buffer_size);
-
-        //printf("pi: %d msg_len: %d msg: %s tally_t: %d\n", world_rank, buffer_size, incoming_file, &tally_t);
-
-        convertFile2Plaintext(tally_t, incoming_file, buffer_size, MPI_COMM_WORLD, world_rank);
-
-        free(incoming_file);
-
-        //printf("pi: %d msg_len: %d msg: %s\n", world_rank, buffer_size, incoming_file);
-
-        //is this needed? (another above)
-        //MPI_Barrier(MPI_COMM_WORLD);
+        workerLoop(tally_t, world_rank, world_size);
     }
 
     MPI_Type_free(&tally_t);
 
+    //use barrier to sync times to degree possible (?)
+    //MPI_Barrier(MPI_COMM_WORLD);
+
+    end_time = MPI_Wtime();
+
+    printf("Total time (proc %d): %f\n", world_rank, end_time - start_time);
+
     MPI_Finalize();
 
-    return(0);
+    return 0;
 }
 
 
