@@ -6,9 +6,9 @@
 int recvFiles(int world_rank){
     int buffer_size = 0, old_buffer_size = 0, i;
     char* incoming_file;
+    MPI_Status status;
 
     for(i = 0; i < 12; i++){
-        MPI_Status status;
 
         //printf("A");
 
@@ -51,7 +51,7 @@ int recvFiles(int world_rank){
 
         //printf("E");
 
-//        printf("Process %d received size %d file, old buffer: %d\n", world_rank, buffer_size, old_buffer_size);
+        printf("Process %d received size %d file, old buffer: %d\n", world_rank, buffer_size, old_buffer_size);
         old_buffer_size = buffer_size;
 
     }
@@ -102,7 +102,7 @@ int sendFiles(){
             line_start_index += strlen(line) + 1;
         }
 
-//        printf("Sending file size %d\n", line_start_index);
+        printf("Sending file size %d\n", line_start_index);
 
         time_s = MPI_Wtime();
         MPI_Send(file_buffer, line_start_index, MPI_CHAR, 1, 0, MPI_COMM_WORLD);
@@ -137,7 +137,7 @@ int main(void){
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
 
     int i;
-    for(i=0; i < 100; i++){
+    for(i=0; i < 1; i++){
 
         if (world_rank == 0){
             if(sendFiles() < 0){

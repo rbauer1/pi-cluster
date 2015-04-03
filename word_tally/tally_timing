@@ -1,0 +1,24 @@
+n 4 /home/pi/cluster/word_tally/run.o sherlock_holmes_ebook.epub
+Hello from pi02, processor 2, process: 2304
+Hello from pi02, processor 3, process: 2305
+Hello from pi01, processor 0, process: 3197
+Hello from pi01, processor 1, process: 3198
+NOTE!!! if extracted files already exist here, this will NOT overwrite them!!!
+Archive:  sherlock_holmes_ebook.epub
+Finished unzipping
+Number of files: 26
+Time to send (file 0), size 585B, to (proc 1) is 0.000082
+(proc 1) time to convert file: 0.000188s
+(proc 1) time to sort file: 0.000277s
+Total time (proc 1): 0.421288
+Time to send (file 1), size 55906B, to (proc 2) is 0.002904
+Time to send (file 2), size 55713B, to (proc 3) is 0.005706
+Total time (proc 0): 0.434556
+(proc 2) time to convert file: 0.053449s
+(proc 3) time to convert file: 0.051727s
+(proc 2) time to sort file: 0.061041s
+Total time (proc 2): 0.500984
+(proc 3) time to sort file: 0.058587s
+(proc 3) time to merge files: 0.009331s
+Total time (proc 3): 0.515475
+
