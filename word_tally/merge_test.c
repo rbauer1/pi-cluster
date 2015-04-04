@@ -231,7 +231,7 @@ int findSplitLocation(Tally *tal, int length, char c){
             return i;
         }
     }
-    return length-1;
+    return (length > 0) ? length-1 : 0;
 }
 
 
@@ -239,14 +239,14 @@ int findSplitLocation(Tally *tal, int length, char c){
 
 int splitData(MPI_Datatype tally_t, int world_rank, int world_size){
 
-    int i, num_tallies = 7;
+    int i, num_tallies = 26;
 
     char *names1[] = {
         "amy",
         "barry",
         "catherine",
         "david",
-/*        "elizabeth",
+        "elizabeth",
         "frank",
         "gail",
         "hank",
@@ -264,20 +264,20 @@ int splitData(MPI_Datatype tally_t, int world_rank, int world_size){
         "tom",
         "uri",
         "vince",
-        "wendy", */
+        "wendy",
         "xavier",
         "yulia",
         "zack" };
 
     char *names2[] = {
-/*        "aaron",
+        "aaron",
         "bridget",
         "chris",
         "dakota",
-        "erik", */
+        "erik",
         "fay",
         "george",
-/*        "helen",
+        "helen",
         "isaac",
         "julia",
         "keefe",
@@ -290,7 +290,7 @@ int splitData(MPI_Datatype tally_t, int world_rank, int world_size){
         "ruth",
         "stan",
         "tina",
-        "uther", */
+        "uther",
         "vivian",
         "walt",
         "xi",
@@ -309,7 +309,7 @@ int splitData(MPI_Datatype tally_t, int world_rank, int world_size){
 
 
     MPI_Status status;
-    int n_inc_tallies = 0, n_split_chars = 3, split_loc;
+    int n_inc_tallies = 0, split_loc;
     Tally *out_tal;
     /*this should be unnecessary in real program */
     if( world_rank % 2 == 0){
@@ -317,9 +317,21 @@ int splitData(MPI_Datatype tally_t, int world_rank, int world_size){
     }else{
         out_tal = tally2;
     }
-    printf("REMEMBER TO CHANGE "split_chars" TO ACCOMODATE A LARGER NUMBER OF
-    CORES!!!!\n");
-    char split_chars[3] = {'g','n','t'};
+    /* these strings are the characters that the tallies are split at at each
+     * level. eg. at level 2 (0-indexed), the alphabet gets split w, k, q, e.
+     *       as in: abcd Efghij Klmnop Qrstuv Wxyz
+     * the strange order that the characters are in in the strings was chosen
+     * so that each process could find the character it needed at the level it
+     * needed it with the least amount of work. The map is just
+     *      world_rank % (2^(level)) */
+    char *split_chars[4] = {
+            "n",
+            "th",
+            "wkqe",
+            "ymsguioc"
+        };
+
+
     for(i = 0; (1 << i) < world_size && (1 << i) > 0; i++){
         /*TODO this conditional (the ==0 part) is dumb, but functions fine and can be changed later */
         if ( ((world_rank >> i)&1) == 0 ){
@@ -328,7 +340,7 @@ int splitData(MPI_Datatype tally_t, int world_rank, int world_size){
 
             /* determine the location at which the tally array needs to be
              * split for this level in the merge */
-            split_loc = findSplitLocation(out_tal, num_tallies, split_chars[(n_split_chars/2)+i]);
+            split_loc = findSplitLocation(out_tal, num_tallies,split_chars[i][world_rank%(1 << i)]);
 
 
             MPI_Send(out_tal, split_loc, tally_t, (1 << i)+world_rank,
@@ -353,7 +365,8 @@ int splitData(MPI_Datatype tally_t, int world_rank, int world_size){
 
             Tally *tp2 = out_tal;
 
-            split_loc = findSplitLocation(out_tal, num_tallies, split_chars[n_split_chars/2 - i]);
+            split_loc = findSplitLocation(out_tal, num_tallies,
+            split_chars[i][world_rank%(1<<i)]);
 
             tp2 += split_loc;
 
