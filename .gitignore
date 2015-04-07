@@ -3,6 +3,7 @@
 
 # text files
 *.txt
+*.x
 
 # epubs (ebooks)
 *.epub
