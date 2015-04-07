@@ -226,34 +226,7 @@ void * mergeTallies(int world_rank, Tally *tal, int n_tal, Tally *oth_tal, int n
 
         }
 
-        /* PUT total_tal INTO FILE */
-/*        FILE *out_file = fopen("words.txt", "w");
-
-        if (out_file == NULL){
-            printf("Error opening out_file. Aborting.\n");
-            return;
-        }
-
-        int i;
-        for(i = 0; i < unique_entries; i++){
-            fprintf(out_file, "%s : %d\n", total_tal[i].word, total_tal[i].num);
-        }
-
-        fclose(out_file);
-*/
-        //printf("FINAL TALLY\n");
-        //printTally(total_tal, unique_entries);
-        //printf("\n");
-/*
-        if(unique_entries > old_size){
-            printf("-----");
-        }
-         printf("tal1: %d tal2:%d sum%d unique: %d\n", n_tal, n_oth_tal,sum, unique_entries);
-*/
-        //free(tal)
         *out_tal_len = unique_entries;
-        /******free(total_tal); TODO MAKE SURE THIS IS TAKEN CARE OF SOMEWHERE ***/
-        /** TODO Do the tally arrays that were passed in need to be freed? **/
         return total_tal;
 }
 
@@ -386,7 +359,6 @@ int beginMergeProcess(int world_rank, MPI_Datatype tally_t, Tally *tallies, int 
 
             int tag = world_rank + MERGE_TAG + i*world_size;
 
-//            printf("P%d is at merge-level %d send with tag: %d size %d\n", world_rank, i,tag, split_loc);
 
             MPI_Send(tallies, split_loc, tally_t, (1 << i) + world_rank, tag, MPI_COMM_WORLD);
 
@@ -398,13 +370,11 @@ int beginMergeProcess(int world_rank, MPI_Datatype tally_t, Tally *tallies, int 
             MPI_Get_count(&status, tally_t, &n_inc_tallies);
 
             Tally inc_tallies[n_inc_tallies];
-//            printf("P%d is at merge-level %d recv with tag: %d size %d\n", world_rank, i,tag,n_inc_tallies);
 
             MPI_Recv(inc_tallies, n_inc_tallies, tally_t, (1 << i) + world_rank, tag, MPI_COMM_WORLD, &status);
 
             int larger = (n_tallies - split_loc > n_inc_tallies) ? n_tallies - split_loc : n_inc_tallies;
 
-//            printf("%d level %d larger: %d\n", world_rank, i, larger);
             Tally *total_tal = calloc(larger, sizeof(Tally));
             if ( total_tal == NULL){
                 printf("mem allocation failed for total_tal (left), aborting.\n");
@@ -412,14 +382,10 @@ int beginMergeProcess(int world_rank, MPI_Datatype tally_t, Tally *tallies, int 
                 return -1;
             }
 
-//            printf("Proc %d is at merge-level %d l merge s\n", world_rank, i);
             total_tal = mergeTallies(world_rank, tp, n_tallies - split_loc, inc_tallies, n_inc_tallies, total_tal, larger, &n_tallies);
-//            printf("%d %p TT:%p\n", world_rank, tallies, total_tal);
             free(tallies);
             tallies = NULL;
             tallies = total_tal;
-//            printf("Proc %d is at merge-level %d l merge f\n", world_rank, i);
-//            printf("%d %p\n", world_rank, tallies);
         }else{
             int tag = world_rank - (1 << i) + MERGE_TAG + i*world_size;
 
@@ -429,18 +395,15 @@ int beginMergeProcess(int world_rank, MPI_Datatype tally_t, Tally *tallies, int 
             MPI_Get_count(&status, tally_t, &n_inc_tallies);
 
             Tally inc_tallies[n_inc_tallies];
-//            printf("P%d is at merge-level %d recv with tag: %d size %d\n", world_rank, i,tag,n_inc_tallies);
 
             MPI_Recv(inc_tallies, n_inc_tallies, tally_t, world_rank - (1 << i), tag, MPI_COMM_WORLD, &status);
 
             tag += (1 << i);
 
-//            printf("P%d is at merge-level %d send with tag: %d size %d\n", world_rank, i,tag, n_tallies - split_loc);
 
             MPI_Send(tp, n_tallies - split_loc, tally_t, world_rank - (1 << i), tag, MPI_COMM_WORLD);
 
             int larger = (split_loc > n_inc_tallies) ? split_loc : n_inc_tallies;
-//            printf("%d level: %d larger: %d\n", world_rank, i, larger);
             Tally *total_tal = calloc(larger, sizeof(Tally));
             if ( total_tal == NULL){
                 printf("mem allocation failed for total_tal (right), aborting.\n");
@@ -448,17 +411,11 @@ int beginMergeProcess(int world_rank, MPI_Datatype tally_t, Tally *tallies, int 
                 return -1;
             }
 
-//            printf("Proc %d is at merge-level %d r merge s\n", world_rank, i);
             total_tal =mergeTallies(world_rank, tallies, split_loc, inc_tallies, n_inc_tallies, total_tal, larger, &n_tallies);
-//            printf("%d %p\n", world_rank, tallies);
-//            printf("%d %p TT:%p\n", world_rank, tallies, total_tal);
             free(tallies);
             tallies = NULL;
             tallies = total_tal;
-//            printf("%d %p\n", world_rank, tallies);
-//            printf("Proc %d is at merge-level %d r merge f\n", world_rank, i);
         }
-//        MPI_Barrier(MPI_COMM_WORLD);
     }
     char file_name[12];
 
@@ -495,8 +452,6 @@ int convertFile2Plaintext(MPI_Datatype tally_t, char *buffer, int buffer_size,
 int world_rank, int iteration_count){
     double time_s, time_e;
     time_s = MPI_Wtime();
-
-//    printf("%d is convertingFile2Plaintext!\n",world_rank);
 
     //create hashtable
     qhashtbl_t *hash = qhashtbl(1000,0);
@@ -535,6 +490,7 @@ int world_rank, int iteration_count){
             case '(':
             case ')':
             case '"':
+                //TODO this null check should probably be "word[0] != '\0'"
                 if (word != NULL && word_index != 0){
                     word[word_index] = '\0';
                     int n = hash->getint(hash, word);
@@ -553,7 +509,7 @@ int world_rank, int iteration_count){
 
     int n_tallies = hash->size(hash);
 
-    Tally *tallies = malloc(sizeof(Tally) * n_tallies);
+    Tally *tallies = calloc(n_tallies, sizeof(Tally));
 
     qhashtbl_obj_t obj;
     //must be cleared before call
@@ -625,12 +581,6 @@ int recvFileLoop(MPI_Datatype tally_t, int world_rank, int world_size){
 
         MPI_Recv(incoming_file, buffer_size, MPI_CHAR, world_rank%4, world_rank%4, MPI_COMM_WORLD, &status);
 
-//      incoming_file[25] = '\0';
-
-//      MPI_Get_count(&status, MPI_CHAR, &buffer_size);
-
-//      printf("pi: %d msg_len: %d msg: %s tally_t: %d\n", world_rank, buffer_size, incoming_file, &tally_t);
-
         convertFile2Plaintext(tally_t, incoming_file, buffer_size, world_rank, count);
         count++;
 
@@ -681,12 +631,13 @@ int mergeLocal(int world_rank, int n_iterations, int level){
 
         char line[MAX_LINE_LEN];
              /******FOR GDB DEBUGGING******
-            int x = 0;
-            while(x==0){
-                sleep(20);
+            if(world_rank==3 && level == 1){
+                int x = 0;
+                while(x==0){
+                    sleep(20);
+                }
             }
             ****************************/
-
         while (fgets(line, MAX_LINE_LEN, file_reader) != NULL){
             for(j = 0; j < MAX_LINE_LEN; j++){
                 if(line[j] != ' ' && line[j] != '\0'){
@@ -726,7 +677,7 @@ int mergeLocal(int world_rank, int n_iterations, int level){
                 //TODO add error handling
                 return -1;
             }
-                       total_tal = mergeTallies(0, tally1, n_tal[0], tally2, n_tal[1], total_tal, n_total_tal, &n_total_tal);
+            total_tal = mergeTallies(0, tally1, n_tal[0], tally2, n_tal[1], total_tal, n_total_tal, &n_total_tal);
             char file[FILE_NAME_LEN];
 
             snprintf(file, sizeof(file) * FILE_NAME_LEN, "words%d-%d%sx.x", i/2, world_rank, suffix);
@@ -751,21 +702,32 @@ int mergeLocal(int world_rank, int n_iterations, int level){
         }
         //clean up
         fclose(file_reader);
+        /*
+        double time_s, time_e;
+        time_s = MPI_Wtime();
+        int delete_file_status = remove(file_name);
+        if(delete_file_status != 0){
+            //TODO add error handling
+            printf("Error: failed trying to delete file: %s Aborting.\n", file_name);
+            return -1;
+        }
+        time_e = MPI_Wtime();
+        printf("%d Time to delete file: %f\n", world_rank, time_e-time_s);
+        */
     }
     if (n_iterations % 2 == 1){
-        int success;
         char new_name[FILE_NAME_LEN], old_name[FILE_NAME_LEN];
         snprintf(new_name, sizeof(new_name) * FILE_NAME_LEN, "words%d-%d%sx.x",n_iterations/2,world_rank,suffix);
         snprintf(old_name, sizeof(old_name) * FILE_NAME_LEN, "words%d-%d%s.x",n_iterations-1,world_rank,suffix);
-        success = rename(old_name, new_name);
-        if(success != 0){
+        int rename_file_status = rename(old_name, new_name);
+        if(rename_file_status != 0){
             //TODO add error handling
             printf("Renaming a file failed in mergeLocal(). old_name:%s new_name:%s Aborting\n",old_name,new_name);
             return -1;
         }
     }
     if(n_iterations > 2){
-        mergeLocal(world_rank, n_iterations/2, level+1);
+        mergeLocal(world_rank, (n_iterations/2) + (n_iterations%2), level+1);
     }
     return 0;
 }
@@ -794,21 +756,12 @@ int main(int argc, char* argv[]){
     MPI_Get_processor_name(hostname, &name_length);
 
 //    if(world_rank == 0) mtrace(); //TODO REMOVE
-    /* Check if mpi world time clocks are synchronized.
-     * 1 if they are, 0 if they aren't.
-     * (they are not for this system)
-    void *global;
-    int f;
-    MPI_Attr_get(MPI_COMM_WORLD, MPI_WTIME_IS_GLOBAL, &global, &f);
-    printf("%d %d ---  %p synchronized? %d\n", world_rank, MPI_WTIME_IS_GLOBAL, global, *((int*)global));
-    */
-
     double start_time, end_time;
     //use barrier to sync times to degree possible (?)
     //MPI_Barrier(MPI_COMM_WORLD);
     start_time = MPI_Wtime();
 
-    printf("Hello from %s, processor %d, process: %ld\n", hostname, world_rank, (long)getpid());
+    //printf("Hello from %s, processor %d, process: %ld\n", hostname, world_rank, (long)getpid());
 
     //setup mpi derived type "Tally" used to transmit individual results
     MPI_Datatype tally_t;
