@@ -269,8 +269,7 @@ int readAndSendFileLoop(MPI_Datatype tally_t, int n_files, int world_rank, int w
         //printf("send buffer size = %d\n", line_start_index[n_lines]);
         if((i+4)%world_size != world_rank){
             time_s = MPI_Wtime();
-            MPI_Send(file_buffer, line_start_index, MPI_CHAR,
-            (i+4)%world_size, world_rank, MPI_COMM_WORLD);
+            MPI_Send(file_buffer, line_start_index, MPI_CHAR, (i+4)%world_size, world_rank, MPI_COMM_WORLD);
             time_e = MPI_Wtime();
 //            printf("Time to send (file %d), size %dB, to (proc %d) from (proc %d) is %f\n", i, line_start_index[n_lines], (i+4)%16, world_rank, time_e-time_s);
         }else{
@@ -417,7 +416,7 @@ int beginMergeProcess(int world_rank, MPI_Datatype tally_t, Tally *tallies, int 
             tallies = total_tal;
         }
     }
-    char file_name[12];
+    char file_name[20];
 
     snprintf(file_name, sizeof(file_name), "words%d-%d.x", iteration_count, world_rank);
 
@@ -465,7 +464,9 @@ int world_rank, int iteration_count){
 
     //might need to add 1 to buffer_size to deal with terminator at end of
     //string. make sure to check after it's working
-
+    /*TODO this function doesn't know how to handle ' since one could write
+     * 'don't' in which parsing the word is much more complicated than the
+     * simple cases that are usually encountered */
     for(i = 0; i < buffer_size; i++){
         if (buffer[i] == '<'){
             while (i < buffer_size && buffer[i] != '>'){
@@ -594,9 +595,9 @@ int recvFileLoop(MPI_Datatype tally_t, int world_rank, int world_size){
 
 //---------------------------------------------------------------------------
 
-int mergeLocal(int world_rank, int n_iterations, int level){
+int mergeLocal(int world_rank, int n_iterations, int level, MPI_Datatype tally_t){
+    const int MAX_LINES = 4096;
     const int MAX_LINE_LEN = 64;
-    const int MAX_LINES = 2048;
     const int FILE_NAME_LEN = 20;
     double time_s, time_e;
     int i,j,k;
@@ -677,24 +678,97 @@ int mergeLocal(int world_rank, int n_iterations, int level){
                 //TODO add error handling
                 return -1;
             }
+
+            //merge
             total_tal = mergeTallies(0, tally1, n_tal[0], tally2, n_tal[1], total_tal, n_total_tal, &n_total_tal);
-            char file[FILE_NAME_LEN];
 
-            snprintf(file, sizeof(file) * FILE_NAME_LEN, "words%d-%d%sx.x", i/2, world_rank, suffix);
+            /* 'else' block handles duplicates. this adds extra code here, but
+             * it should help decrease total iterations? TODO check this */
+            if(n_iterations > 2){
+                 //write out file
+                char file[FILE_NAME_LEN];
 
-            FILE *out_file = fopen(file, "w");
+                snprintf(file, sizeof(file) * FILE_NAME_LEN, "words%d-%d%sx.x", i/2, world_rank, suffix);
 
-            if (out_file == NULL){
-                //TODO add error handling!
-                printf("Error opening out_file in beginMergeProcess(). Aborting.\n");
-                return -1;
-            }
-            for(k = 0; k < n_total_tal; k++){
-                fprintf(out_file, "%s : %d\n", total_tal[k].word, total_tal[k].num);
+                FILE *out_file = fopen(file, "w");
+
+                if (out_file == NULL){
+                    //TODO add error handling!
+                    printf("Error opening out_file in mergeLocal(). Aborting.\n");
+                    return -1;
+                }
+
+                for(k = 0; k < n_total_tal; k++){
+                    fprintf(out_file, "%s : %d\n", total_tal[k].word, total_tal[k].num);
+                }
+                fclose(out_file);
+
+            }else if (world_rank > 3){
+
+                MPI_Send(total_tal, n_total_tal, tally_t, world_rank%4, world_rank, MPI_COMM_WORLD);
+
+            }else{
+                //this rank's file goes last, so its tally array needs to be
+                //stored while the other rank's data is received and written
+                Tally *tmp_tally = calloc(n_total_tal, sizeof(Tally));
+                tmp_tally = memcpy(tmp_tally, total_tal, n_total_tal * sizeof(Tally));
+                //write out file
+                char file[FILE_NAME_LEN];
+                int l, tmp_total = n_total_tal;
+                MPI_Status status;
+                int order[4] = {12,4,8,0};
+
+                snprintf(file, sizeof(file) * FILE_NAME_LEN, "words%d.x", world_rank);
+
+                FILE *out_file = fopen(file, "w");
+
+                if (out_file == NULL){
+                    //TODO add error handling!
+                    printf("Error opening out_file in mergeLocal(). Aborting.\n");
+                    return -1;
+                }
+
+                for(l = 0; l < 4; l++){
+                    int current = world_rank + order[l];
+
+                    if(l != 3){
+                        MPI_Probe(current, current, MPI_COMM_WORLD, &status);
+                        MPI_Get_count(&status, tally_t, &n_total_tal);
+                        free(total_tal);
+                        total_tal = calloc(n_total_tal, sizeof(Tally));
+                        if (total_tal == NULL){
+                            printf("%d calloc failed in mergeLocal from %d\n",world_rank, current);
+                            return -1;
+                        }
+                        MPI_Recv(total_tal, n_total_tal, tally_t, current, current, MPI_COMM_WORLD, &status);
+                    }else{
+                        //restore this rank's data to finally be written
+                        free(total_tal);
+                        total_tal = tmp_tally;
+                        n_total_tal = tmp_total;
+                    }
+
+                    int m, running_total;
+                    for(k = 0; k < n_total_tal; k++){
+                        running_total = total_tal[k].num;
+                        for(m = 1; m + k < n_total_tal; m++){
+                            if(strcasecmp(total_tal[k+m].word, total_tal[k].word) == 0){
+                                running_total += total_tal[k+m].num;
+                            }else{
+                                m--;
+                                break;
+                            }
+                        }
+                        //don't have this function but might be a good idea to do
+                        //strlwr(total_tal[k].word);
+                        fprintf(out_file, "%s : %d\n", total_tal[k].word, running_total);
+                        k+=m;
+                    }
+                }
+                fclose(out_file);
             }
 
             //clean up
-            fclose(out_file);
             free(total_tal);
             total_tal = NULL;
             n_tal[0] = 0;
@@ -702,20 +776,19 @@ int mergeLocal(int world_rank, int n_iterations, int level){
         }
         //clean up
         fclose(file_reader);
-        /*
-        double time_s, time_e;
-        time_s = MPI_Wtime();
+//        double time_s, time_e;
+//        time_s = MPI_Wtime();
         int delete_file_status = remove(file_name);
         if(delete_file_status != 0){
             //TODO add error handling
             printf("Error: failed trying to delete file: %s Aborting.\n", file_name);
             return -1;
         }
-        time_e = MPI_Wtime();
-        printf("%d Time to delete file: %f\n", world_rank, time_e-time_s);
-        */
+//        time_e = MPI_Wtime();
+//        printf("%d Time to delete file: %f\n", world_rank, time_e-time_s);
+
     }
-    if (n_iterations % 2 == 1){
+    if (n_iterations % 2 == 1 && n_iterations > 2){
         char new_name[FILE_NAME_LEN], old_name[FILE_NAME_LEN];
         snprintf(new_name, sizeof(new_name) * FILE_NAME_LEN, "words%d-%d%sx.x",n_iterations/2,world_rank,suffix);
         snprintf(old_name, sizeof(old_name) * FILE_NAME_LEN, "words%d-%d%s.x",n_iterations-1,world_rank,suffix);
@@ -726,9 +799,52 @@ int mergeLocal(int world_rank, int n_iterations, int level){
             return -1;
         }
     }
-    if(n_iterations > 2){
-        mergeLocal(world_rank, (n_iterations/2) + (n_iterations%2), level+1);
+    if(n_iterations > 1){
+        mergeLocal(world_rank, (n_iterations/2) + (n_iterations%2), level+1, tally_t);
     }
+    return 0;
+}
+//---------------------------------------------------------------------------
+
+int finalConcat(){
+    int i;
+    const int MAX_LINE_LEN = 64;
+    char file[19] = "allWordsParallel.x\0";
+
+    FILE *out_file = fopen(file, "w");
+
+    if (out_file == NULL){
+        //TODO add error handling!
+        printf("Error opening out_file in finalConcat(). Aborting.\n");
+        return -1;
+    }
+
+    for(i = 3; i > -1; i--){
+        //length of filename (should allow for 9999 pages)
+        char file_name[10];
+
+        //makes file_name into equivalent of "OPS/main"+i+".xml"
+        snprintf(file_name, sizeof(file_name), "words%d.x", i);
+
+        FILE *file_reader = fopen(file_name, "rt");
+
+        if (file_reader == NULL){
+            printf("Error opening %s in finalConcat(). Aborting.\n", file_name);
+            //fclose(out_file);
+            return -1;
+        }
+
+        char line[MAX_LINE_LEN];
+        while (fgets(line, MAX_LINE_LEN, file_reader) != NULL){
+            fputs(line, out_file);
+        }
+        //clean up
+        fclose(file_reader);
+    }
+
+    //clean up
+    fclose(out_file);
+
     return 0;
 }
 
@@ -740,11 +856,15 @@ int main(int argc, char* argv[]){
      * need to actually be handled in the case of that they return -1, as
      * currently, the functions that call them don't actually check their
      * returns*/
-    if (argc < 2){
+    /*if (argc < 2){
         printf("Usage: run [path/to/epub]\n");
         return -1;
-    }
+    }*/
 
+    if (argc < 2){
+        printf("Usage: run [num_files]\n");
+        return -1;
+    }
 
     int world_rank, world_size, name_length, n_files, n_iterations;
     char hostname[MPI_MAX_PROCESSOR_NAME];
@@ -781,7 +901,7 @@ int main(int argc, char* argv[]){
 */
         //TODO REMOVE!!!!
         //TODO currently segfaults if n_files%16 != 0
-        n_files = 112;
+        n_files = atoi(argv[1]);
 
         MPI_Barrier(MPI_COMM_WORLD);
         MPI_Bcast(&n_files, 1, MPI_INT, 0, MPI_COMM_WORLD);
@@ -795,16 +915,28 @@ int main(int argc, char* argv[]){
     }else{
         n_iterations = recvFileLoop(tally_t, world_rank, world_size);
     }
-    mergeLocal(world_rank, n_iterations, 0);
+    mergeLocal(world_rank, n_iterations, 0, tally_t);
 
     MPI_Type_free(&tally_t);
+
+    if(world_rank==0){
+        finalConcat();
+    }
 
     //use barrier to sync times to degree possible (?)
     //MPI_Barrier(MPI_COMM_WORLD);
 
     end_time = MPI_Wtime();
 
-    printf("-------------------------Total time (proc %d): %f\n", world_rank, end_time - start_time);
+    double total_time = end_time - start_time, average_time = 0;
+
+    MPI_Reduce(&total_time, &average_time, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+
+    average_time = average_time / world_size;
+
+//  printf("-----Total time (proc %d): %f\n", world_rank, end_time - start_time);
+
+    if(world_rank==0) printf("%f\n", average_time);
 
     MPI_Barrier(MPI_COMM_WORLD);
 

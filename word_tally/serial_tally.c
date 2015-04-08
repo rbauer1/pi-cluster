@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <time.h> //for timing
 #include <qlibc/qlibc.h> //used for qhashtbl_t
 #include <qlibc/containers/qhashtbl.h> //used for qhashtbl_t
 #include <string.h> //used for strcpy
@@ -6,6 +7,7 @@
 #include <dirent.h> //used for counting files
 #include <strings.h> //for strcasecmp()
 #include <stdlib.h> //for qsort() (and more?)
+#include <math.h> //for floor TODO this is dumb. get around it
 
 //#include <mcheck.h> //TODO REMOVE THIS. for mtrace(), muntrace()
 
@@ -112,7 +114,7 @@ int findSplitLocation(Tally *tal, int length, char c){
  * serious problem if it is ever expected to handle other encodings (such as
  * utf-8) */
 
-int readAndSendFileLoop(int n_files){
+int readAndTally(int n_files){
     const int MAX_LINE_LEN = 128;
     int i, j;
     /* TODO mtrace says that there is a leak here of size 0x100000 which is the
@@ -216,8 +218,19 @@ int readAndSendFileLoop(int n_files){
         printf("Error opening out_file in beginMergeProcess(). Aborting.\n");
         return -1;
     }
+    int running_total;
     for(i = 0; i < n_tallies; i++){
-        fprintf(out_file, "%s : %d\n", tallies[i].word, tallies[i].num);
+        running_total = tallies[i].num;
+        for(j = 1; j + i < n_tallies; j++){
+            if(strcasecmp(tallies[i+j].word, tallies[i].word) == 0){
+                running_total += tallies[i+j].num;
+            }else{
+                j--;
+                break;
+            }
+        }
+        fprintf(out_file, "%s : %d\n", tallies[i].word, running_total);
+        i+=j;
     }
 
     //clean up
@@ -234,18 +247,31 @@ int main(int argc, char* argv[]){
      * need to actually be handled in the case of that they return -1, as
      * currently, the functions that call them don't actually check their
      * returns*/
-    if (argc < 2){
+    /*if (argc < 2){
         printf("Usage: run [path/to/epub]\n");
         return -1;
+    }*/
+    if (argc < 2){
+        printf("Usage: run.o [count]\n");
+        return -1;
     }
+
 
     //setup mpi derived type "Tally" used to transmit individual results
     //TODO REMOVE!!!!
     //TODO currently segfaults if n_files%16 != 0
-    int n_files = 112;
+    int n_files = atoi(argv[1]);
 
+    struct timespec time_s, time_e, result;
+    clock_gettime(CLOCK_MONOTONIC, &time_s);
+    readAndTally(n_files);
+    clock_gettime(CLOCK_MONOTONIC, &time_e);
+    result.tv_nsec = time_e.tv_nsec - time_s.tv_nsec;
+    if ( (time_e.tv_nsec - time_s.tv_nsec) < 0){
+        result.tv_nsec += 1000000000;
+    }
 
-    readAndSendFileLoop(n_files);
+    printf("%d.%ld\n", (int)(floor(difftime(time_e.tv_sec, time_s.tv_sec))), result.tv_nsec);
 
 //    printf("-------------------------Total time (proc %d): %f\n", world_rank, end_time - start_time);
 
