@@ -1,12 +1,11 @@
 #include <stdio.h>
 #include <time.h> //for timing
-#include <qlibc/qlibc.h> //used for qhashtbl_t
-#include <qlibc/containers/qhashtbl.h> //used for qhashtbl_t
+#include <qlibc/qlibc.h> //used for qtreetbl_t
+#include <qlibc/containers/qtreetbl.h> //used for qtreetbl_t
 #include <string.h> //used for strcpy
-#include <unistd.h> //used for unzip() (I think.)
-#include <dirent.h> //used for counting files
-#include <strings.h> //for strcasecmp()
-#include <stdlib.h> //for qsort() (and more?)
+//#include <unistd.h> //used for unzip()
+//#include <dirent.h> //used for counting files
+#include <stdlib.h> //for qsort() and malloc etc
 #include <math.h> //for floor TODO this is dumb. get around it
 
 //#include <mcheck.h> //TODO REMOVE THIS. for mtrace(), muntrace()
@@ -29,11 +28,11 @@ typedef struct{
 int convertFile2Plaintext(char *buffer, int buffer_size, int iteration_count);
 
 //---------------------------------------------------------------------------
-
+/*
 int tallyCmp(const void *a , const void*b){
-    return strcasecmp((*(Tally*)a).word, (*(Tally*)b).word);
+    return strcmp((*(Tally*)a).word, (*(Tally*)b).word);
 }
-
+*/
 //---------------------------------------------------------------------------
 
 
@@ -47,7 +46,7 @@ void printTally(Tally *t, int num_tally){
 }
 
 //---------------------------------------------------------------------------
-
+/*
 int unzip(char *path){
 
     pid_t childpid;
@@ -71,10 +70,10 @@ int unzip(char *path){
     }
     return 0;
 }
-
+*/
 
 //---------------------------------------------------------------------------
-
+/*
 int countFiles(char *path){
     int n_files = 0;
     DIR *dir;
@@ -93,13 +92,14 @@ int countFiles(char *path){
     closedir(dir);
     return n_files;
 }
-
+*/
 //---------------------------------------------------------------------------
 
 int findSplitLocation(Tally *tal, int length, char c){
     int i;
     for(i = 0; i < length; i++){
-        if(tal[i].word[0] == c || tolower(tal[i].word[0]) == c){
+        //see note by 'tolower in readAndTally
+        if(tal[i].word[0] == c){
             return i;
         }
     }
@@ -122,7 +122,7 @@ int readAndTally(int n_files){
      * snprintf line below. I'm not entirely sure what to make of it or do
      * about it currently */
     //create hashtable
-    qhashtbl_t *hash = qhashtbl(7500,0);
+    qtreetbl_t *tree = qtreetbl(0);
 
     for(i = 0; i<n_files; i++){
         //length of filename (should allow for 9999 pages)
@@ -170,13 +170,21 @@ int readAndTally(int n_files){
                         //TODO this null check should probably be "word[0] != '\0'"
                         if (word != NULL && word_index != 0){
                             word[word_index] = '\0';
-                            int n = hash->getint(hash, word);
-                            hash->putint(hash, word, n+1);
+                            size_t s;
+                            int *count = (int*)tree->get(tree, word, &s, false);
+                            if(count == NULL){
+                                int c = 1;
+                                tree->put(tree, word, &c, sizeof(int));
+                            }else{
+                                *count += 1;
+                            }
                             word_index = 0;
                         }
                         break;
                     default:
-                        word[word_index] = line[j];
+                        /*See comment in same part of word_tally.c about
+                         * 'tolower' and its implications. */
+                        word[word_index] = tolower(line[j]);
                         word_index++;
                     }
                 }
@@ -189,25 +197,20 @@ int readAndTally(int n_files){
     }
     /* this next section can and probably should be a separate method */
 
-    int n_tallies = hash->size(hash);
+    int n_tallies = tree->size(tree);
 
     Tally *tallies = calloc(n_tallies, sizeof(Tally));
 
-    qhashtbl_obj_t obj;
+    qtreetbl_obj_t obj;
     //must be cleared before call
     memset((void*) &obj, 0, sizeof(obj));
-    for (i = 0; hash->getnext(hash, &obj, true); i++){
-        //dump hash keys:values into Tally array
+    for (i = 0; tree->getnext(tree, &obj, false); i++){
         strcpy( tallies[i].word, obj.name);
-        tallies[i].num = atoi((char*)obj.data); //ew. improve if possible
-        free(obj.name);
-        free(obj.data);
+        int *c = (int*)obj.data;
+        tallies[i].num = *c;
     }
 
-    hash->free(hash);
-
-    //sort this process's Tally array
-    qsort(tallies, n_tallies, sizeof(Tally), tallyCmp);
+    tree->free(tree);
 
     char file[11] = "allWords.x\0";
 
@@ -218,8 +221,9 @@ int readAndTally(int n_files){
         printf("Error opening out_file in beginMergeProcess(). Aborting.\n");
         return -1;
     }
-    int running_total;
+//    int running_total;
     for(i = 0; i < n_tallies; i++){
+/*not needed if tolower is called earlier
         running_total = tallies[i].num;
         for(j = 1; j + i < n_tallies; j++){
             if(strcasecmp(tallies[i+j].word, tallies[i].word) == 0){
@@ -231,6 +235,8 @@ int readAndTally(int n_files){
         }
         fprintf(out_file, "%s : %d\n", tallies[i].word, running_total);
         i+=j;
+*/
+        fprintf(out_file, "%s : %d\n", tallies[i].word, tallies[i].num);
     }
 
     //clean up
