@@ -3,11 +3,7 @@
 #include <qlibc/containers/qtreetbl.h> //used for qtreetbl_t
 #include <mpi.h> //used for mpi calls
 #include <string.h> //used for strcpy
-//#include <unistd.h> //used for unzip() (I think.)
-//#include <dirent.h> //used for counting files
-//#include <strings.h> //for strcmp()
 #include <stdlib.h> //for qsort() and malloc etc
-//#include <mcheck.h> //TODO REMOVE THIS. for mtrace(), muntrace()
 
 /* technically longest commonly accepted word is 45 letters, however, for
  * everything to include marry poppins we'd use 34. this number will likely
@@ -21,21 +17,38 @@ static const int LINE_LEN = 80;
 
 static const int MERGE_TAG = 9;
 
+static double sum_par_merge_time = 0;
+static int n_par_merge = 0;
+
+static double sum_parse_tally_time = 0;
+static int n_parse_tally = 0;
+
+static double sum_read_send_time = 0;
+static int n_read_send = 0;
+
 typedef struct{
     char word[ WORD_LEN ];
     int num;
 } Tally;
 
-int convertFile2Plaintext(MPI_Datatype tally_t, char *buffer, int buffer_size, int world_rank, int iteration_count);
+int parseAndTally(MPI_Datatype tally_t, char *buffer, int buffer_size, int world_rank, int iteration_count);
 
 //---------------------------------------------------------------------------
-/*
-int tallyCmp(const void *a , const void*b){
-    return strcmp((*(Tally*)a).word, (*(Tally*)b).word);
+
+double reduceTime(double time_s, double time_e, int world_rank, int world_size, char* mesg, int print){
+
+    double total_time = time_e - time_s, average_time = 0;
+
+    MPI_Reduce(&total_time, &average_time, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+
+    average_time = average_time / world_size;
+
+//  printf("-----Total time (proc %d): %f\n", world_rank, end_time - start_time);
+
+    if(world_rank==0 && print == 1) printf("%s%f\n", mesg, average_time);
+    return average_time;
+
 }
-*/
-//---------------------------------------------------------------------------
-
 
 /*Used simply to verify successful send/recv */
 void printTally(Tally *t, int num_tally){
@@ -97,69 +110,16 @@ void initializeTallyType(MPI_Datatype *tally_type){
 }
 
 //---------------------------------------------------------------------------
-/*
-int unzip(char *path){
-
-    pid_t childpid;
-
-    childpid = fork();
-
-    if (childpid == -1){
-        printf("Error in fork. Aborting.\n");
-        return -1;
-    }
-
-    if (childpid == 0){
-        //Child will handle unzipping the file
-        printf("NOTE!!! if extracted files already exist here, this will NOT overwrite them!!!\n");
-        execl("/usr/bin/unzip", "unzip", "-n", path, "OPS/main*", (char*) NULL);
-    }else{
-        //parent waits for child to finish before continuing
-        wait(NULL);
-        printf("Finished unzipping\n");
-        return 0;
-    }
-    return 0;
-}
-*/
-//---------------------------------------------------------------------------
-//TODO this function doesn't actually need world_rank, it's purely for
 //debugging
-void * mergeTallies(int world_rank, Tally *tal, int n_tal, Tally *oth_tal, int n_oth_tal, Tally *total_tal, int old_size, int *out_tal_len){
+void * mergeTallies(Tally *tal, int n_tal, Tally *oth_tal, int n_oth_tal, Tally *total_tal, int old_size, int *out_tal_len){
        double REALLOC_SCALE = 2;
         int tal_p = 0, oth_tal_p = 0, unique_entries = 0;
 
         //total number of words (loop-guard)
         int sum = n_tal + n_oth_tal;
-
-        /* TODO: this can be likely be done one time per processor at the very
-         * end of the program's execution. this will slightly increase the size
-         * of the files being thrown around, but it should be a pretty
-         * significant speedup since this doubles the number of comparisons.
-         *
-         * this is used to catch cases where the next word being placed into
-         * total_tal is the same as the last word that was placed there except
-         * it has a different case. this happens whenever one list has the
-         * upper and lower case of a word, and the other only has only upper or
-         * lower. the checks for this add a lot of comparisons, so if it is
-         * possible to get around this somehow, it's probably worth it*/
-//XX        char last_word[ WORD_LEN ];
-        //something that is not a word
-//XX        strcpy(last_word, "!!!!!!");
-//XX        strcpy(total_tal[0].word, "??????");
-
         int cmp;
-/*        if(n_tal == 1){
-            printf("%d tal1: %d tal2:%d tal[0]%s\n", world_rank, n_tal, n_oth_tal, tal[0].word);
-        }else if(n_oth_tal == 1){
-            printf("%d tal1: %d tal2:%d oth_tal[0]%s\n", world_rank, n_tal, n_oth_tal, oth_tal[0].word);
-        }else{
-            printf("%d tal1: %d tal2:%d\n", world_rank, n_tal, n_oth_tal);
-        }
-*/
         //merge tallies
         while(tal_p + oth_tal_p < sum){
-//        while(tal_p + oth_tal_p < old_size){
             /*this if-else prevents the case where one array is finished before
              * the other, and an overflow occurs that corrupts the data. this
              * way, if one finishes before the other, the other simply fills in
@@ -171,48 +131,28 @@ void * mergeTallies(int world_rank, Tally *tal, int n_tal, Tally *oth_tal, int n
             }else{
                 cmp = strcmp(tal[tal_p].word, oth_tal[oth_tal_p].word);
             }
-//            if(world_rank==4) printf("--%d--%d-%s:%d %d-%s:%d-------- diff:%d last_word:%s\n",world_rank, tal_p, tal[tal_p].word, tal[tal_p].num, oth_tal_p, oth_tal[oth_tal_p].word, oth_tal[oth_tal_p].num, cmp, last_word);
             if (cmp == 0){
-//XX                if (strcmp(tal[tal_p].word, last_word) == 0){
-//XX                    total_tal[unique_entries-1].num += tal[tal_p].num + oth_tal[oth_tal_p].num;
-//XX                }else{
                     strcpy(total_tal[unique_entries].word, tal[tal_p].word);
                     total_tal[unique_entries].num = tal[tal_p].num + oth_tal[oth_tal_p].num;
                     unique_entries++;
-//XX                }
                 tal_p++;
                 oth_tal_p++;
             }else if (cmp < 0){
-//XX                if (strcmp(tal[tal_p].word, last_word) == 0){
-//XX                    total_tal[unique_entries-1].num += tal[tal_p].num;
-//XX                }else{
                     strcpy(total_tal[unique_entries].word, tal[tal_p].word);
                     total_tal[unique_entries].num = tal[tal_p].num;
                     unique_entries++;
-//XX                }
                 tal_p++;
             }else{
-//XX                if (strcmp(oth_tal[oth_tal_p].word, last_word) == 0){
-//XX                    total_tal[unique_entries-1].num += oth_tal[oth_tal_p].num;
-//XX                }else{
                     strcpy(total_tal[unique_entries].word, oth_tal[oth_tal_p].word);
                     total_tal[unique_entries].num = oth_tal[oth_tal_p].num;
                     unique_entries++;
-//XX                }
                 oth_tal_p++;
             }
 
-            //update last_word
-//XX            strcpy(last_word, total_tal[unique_entries-1].word);
-
-           // printf("%s:%d\n", total_tal[unique_entries-1].word, total_tal[unique_entries-1].num);
 
             if (unique_entries == old_size){
-//                printf("%d tal1: %d tal2:%d\n", world_rank,  n_tal, n_oth_tal);
-//                printf("%d RESCALING FROM %d to %d\n", world_rank, old_size, (int)(old_size*REALLOC_SCALE));
                 old_size = (int)(REALLOC_SCALE * old_size);
                 //need to allocate more memory for total_tal
-//                printf("%d %p\n", world_rank, total_tal);
                 Tally *tmp = realloc(total_tal, old_size * sizeof(Tally));
                 if (tmp != NULL){
                     total_tal = tmp;
@@ -220,8 +160,6 @@ void * mergeTallies(int world_rank, Tally *tal, int n_tal, Tally *oth_tal, int n
                     printf("mem REallocation failed, aborting.\n");
                     return NULL;
                 }
-//                printf("%d %p\n", world_rank, total_tal);
-//                printf("%d unique:%d tal_p%d oth_tal_p%d\n", world_rank, unique_entries, tal_p, oth_tal_p);
             }
 
         }
@@ -244,6 +182,7 @@ int readAndSendFileLoop(MPI_Datatype tally_t, int n_files, int world_rank, int w
     char *file_buffer = (char*)malloc(sizeof(char)*MAX_LINE_LEN*MAX_LINES);
     for(i = world_rank; i<n_files; i+=4){
         int line_start_index = 0;
+         if((i+4)%world_size != world_rank) time_s = MPI_Wtime();
 
         //length of filename (should allow for 9999 pages)
         char file_name[17];
@@ -268,13 +207,13 @@ int readAndSendFileLoop(MPI_Datatype tally_t, int n_files, int world_rank, int w
 
         //printf("send buffer size = %d\n", line_start_index[n_lines]);
         if((i+4)%world_size != world_rank){
-            time_s = MPI_Wtime();
             MPI_Send(file_buffer, line_start_index, MPI_CHAR, (i+4)%world_size, world_rank, MPI_COMM_WORLD);
             time_e = MPI_Wtime();
+            sum_read_send_time += time_e - time_s;
+            n_read_send++;
 //            printf("Time to send (file %d), size %dB, to (proc %d) from (proc %d) is %f\n", i, line_start_index[n_lines], (i+4)%16, world_rank, time_e-time_s);
         }else{
-            convertFile2Plaintext(tally_t, file_buffer, line_start_index,
-            world_rank, count);
+            parseAndTally(tally_t, file_buffer, line_start_index, world_rank, count);
             count++;
         }
         //clean up
@@ -287,27 +226,6 @@ int readAndSendFileLoop(MPI_Datatype tally_t, int n_files, int world_rank, int w
     return count;
 }
 
-//---------------------------------------------------------------------------
-/*
-int countFiles(char *path){
-    int n_files = 0;
-    DIR *dir;
-    struct dirent *entry;
-
-    dir = opendir(path);
-    if (dir == NULL){
-        printf("Error opening directory");
-        return -1;
-    }
-    while ((entry = readdir(dir)) != NULL){
-        if (entry->d_type == DT_REG){
-            n_files++;
-        }
-    }
-    closedir(dir);
-    return n_files;
-}
-*/
 //---------------------------------------------------------------------------
 
 int findSplitLocation(Tally *tal, int length, char c){
@@ -322,10 +240,10 @@ int findSplitLocation(Tally *tal, int length, char c){
 
 //---------------------------------------------------------------------------
 
-int beginMergeProcess(int world_rank, MPI_Datatype tally_t, Tally *tallies, int n_tallies, int iteration_count){
+int parallelMerge(int world_rank, MPI_Datatype tally_t, Tally *tallies, int n_tallies, int iteration_count){
     /* these strings are the characters that the tallies are split at at each
-     * level. eg. at level 2 (0-indexed), the alphabet gets split w, k, q, e.
-     *       as in: abcd Efghij Klmnop Qrstuv Wxyz
+     * level. eg. at level 2 (0-indexed), the alphabet gets split t, h, n, c.
+     *       resulting in: ab Cde fg Hij klm Nop qrs Tuvwxyz
      * the strange order that the characters are in in the strings was chosen
      * so that each process could find the character it needed at the level it
      * needed it with the least amount of work. The map is just
@@ -381,7 +299,7 @@ int beginMergeProcess(int world_rank, MPI_Datatype tally_t, Tally *tallies, int 
                 return -1;
             }
 
-            total_tal = mergeTallies(world_rank, tp, n_tallies - split_loc, inc_tallies, n_inc_tallies, total_tal, larger, &n_tallies);
+            total_tal = mergeTallies(tp, n_tallies - split_loc, inc_tallies, n_inc_tallies, total_tal, larger, &n_tallies);
             free(tallies);
             tallies = NULL;
             tallies = total_tal;
@@ -410,7 +328,7 @@ int beginMergeProcess(int world_rank, MPI_Datatype tally_t, Tally *tallies, int 
                 return -1;
             }
 
-            total_tal =mergeTallies(world_rank, tallies, split_loc, inc_tallies, n_inc_tallies, total_tal, larger, &n_tallies);
+            total_tal =mergeTallies(tallies, split_loc, inc_tallies, n_inc_tallies, total_tal, larger, &n_tallies);
             free(tallies);
             tallies = NULL;
             tallies = total_tal;
@@ -423,7 +341,7 @@ int beginMergeProcess(int world_rank, MPI_Datatype tally_t, Tally *tallies, int 
     FILE *out_file = fopen(file_name, "w");
 
     if (out_file == NULL){
-        printf("Error opening out_file in beginMergeProcess(). Aborting.\n");
+        printf("Error opening out_file in parallelMerge(). Aborting.\n");
         return -1;
     }
     for(i = 0; i < n_tallies; i++){
@@ -443,12 +361,14 @@ int beginMergeProcess(int world_rank, MPI_Datatype tally_t, Tally *tallies, int 
 
 //---------------------------------------------------------------------------
 /**TODO This function does not account for alternate encodings besides
- * ascii!!!! in limited proof-of-concept examples this is okay, but it is a
+ * ascii! in limited proof-of-concept examples this is okay, but it is a
  * serious problem if it is ever expected to handle other encodings (such as
  * utf-8) */
-int convertFile2Plaintext(MPI_Datatype tally_t, char *buffer, int buffer_size,
+int parseAndTally(MPI_Datatype tally_t, char *buffer, int buffer_size,
 int world_rank, int iteration_count){
     double time_s, time_e;
+    int world_size;
+    MPI_Comm_size(MPI_COMM_WORLD, &world_size);
     time_s = MPI_Wtime();
 
     //create left-leaning rb tree
@@ -491,7 +411,6 @@ int world_rank, int iteration_count){
             case '(':
             case ')':
             case '"':
-                //TODO this null check should probably be "word[0] != '\0'"
                 if (word != NULL && word_index != 0){
                     word[word_index] = '\0';
                     size_t s;
@@ -514,7 +433,7 @@ int world_rank, int iteration_count){
                  * be passed a comparison function that compares strings
                  * ignoring cases, otherwise it will cause segfaults.
                  *
-                 * NOTE: if tolower is not called before beginMergeProcess(),
+                 * NOTE: if tolower is not called before parallelMerge(),
                  * then findSplitLocation() will need to be updated to account
                  * for the starting characters possibly being of different
                  * cases. this WILL break the progam if not heeded.*/
@@ -527,7 +446,6 @@ int world_rank, int iteration_count){
     /* this next section can and probably should be a separate method */
 
     int n_tallies = tree->size(tree);
-//    printf("%d starting iter\n", world_rank);
     Tally *tallies = calloc(n_tallies, sizeof(Tally));
     qtreetbl_obj_t tree_obj;
     memset((void*)&tree_obj, 0, sizeof(tree_obj)); //must be cleared before call
@@ -538,16 +456,21 @@ int world_rank, int iteration_count){
     }
 
     tree->free(tree);
-//    printf("%d finished iter\n", world_rank);
 
-//    if(world_rank==0) printTally(tallies, n_tallies);
     time_e = MPI_Wtime();
 
-//    printf("(proc %d) time to convert and sort file: %fs\n", world_rank, time_e-time_s);
+    sum_parse_tally_time += reduceTime(time_s, time_e, world_rank, world_size, "parseAndTally Time:", 0);
+    n_parse_tally++;
 
-//    printf("%d is beginning merge\n", world_rank);
-    beginMergeProcess(world_rank, tally_t, tallies, n_tallies, iteration_count);
-//    printf("%d finished merge\n", world_rank);
+
+    time_s = MPI_Wtime();
+
+    parallelMerge(world_rank, tally_t, tallies, n_tallies, iteration_count);
+
+    time_e = MPI_Wtime();
+
+    sum_par_merge_time += reduceTime(time_s, time_e, world_rank, world_size, "Parallel Merge Time:", 0);
+    n_par_merge++;
 
    //TODO not doing anything currently
     return 0;
@@ -571,7 +494,6 @@ int recvFileLoop(MPI_Datatype tally_t, int world_rank, int world_size){
         //get file_buffer size and store in buffer_size
         MPI_Get_count(&status, MPI_CHAR, &buffer_size);
 
-        //printf("recv buffer_size = %d\n", buffer_size);
 
         if (buffer_size < 0){
             printf("Error: buffer_size = %d\n", buffer_size);
@@ -594,7 +516,7 @@ int recvFileLoop(MPI_Datatype tally_t, int world_rank, int world_size){
 
         MPI_Recv(incoming_file, buffer_size, MPI_CHAR, world_rank%4, world_rank%4, MPI_COMM_WORLD, &status);
 
-        convertFile2Plaintext(tally_t, incoming_file, buffer_size, world_rank, count);
+        parseAndTally(tally_t, incoming_file, buffer_size, world_rank, count);
         count++;
 
         old_buffer_size = buffer_size;
@@ -639,7 +561,6 @@ int mergeLocal(int world_rank, int n_iterations, int level, MPI_Datatype tally_t
 
         if (file_reader == NULL){
             printf("rank: %d Error opening %s Aborting.\n", world_rank, file_name);
-            //TODO do this? fclose(out_file);
             return -1;
         }
 
@@ -684,15 +605,10 @@ int mergeLocal(int world_rank, int n_iterations, int level, MPI_Datatype tally_t
                 return -1;
             }
 
-//            if(world_rank==0 && n_iterations <= 2) printf("i: %d, level: %d sum: %d\n", i, level, n_tal[0] + n_tal[1]);
 
             //merge
-            total_tal = mergeTallies(0, tally1, n_tal[0], tally2, n_tal[1], total_tal, n_total_tal, &n_total_tal);
+            total_tal = mergeTallies(tally1, n_tal[0], tally2, n_tal[1], total_tal, n_total_tal, &n_total_tal);
 
-//            if(world_rank==0 && n_iterations <= 2) printf("i: %d, level: %d n_total_tal: %d\n", i, level, n_total_tal);
-
-            /* 'else' block handles duplicates. this adds extra code here, but
-             * it should help decrease total iterations? TODO check this */
             if(n_iterations > 2){
                  //write out file
                 char file[FILE_NAME_LEN];
@@ -756,7 +672,7 @@ int mergeLocal(int world_rank, int n_iterations, int level, MPI_Datatype tally_t
                         total_tal = tmp_tally;
                         n_total_tal = tmp_total;
                     }
-/* not needed if tolower called in convert2Plaintext()
+/* not needed if tolower called in parseAndTally()
                     int m, running_total;
                     for(k = 0; k < n_total_tal; k++){
                         running_total = total_tal[k].num;
@@ -789,16 +705,12 @@ int mergeLocal(int world_rank, int n_iterations, int level, MPI_Datatype tally_t
         }
         //clean up
         fclose(file_reader);
-//        double time_s, time_e;
-//        time_s = MPI_Wtime();
         int delete_file_status = remove(file_name);
         if(delete_file_status != 0){
             //TODO add error handling
             printf("Error: failed trying to delete file: %s Aborting.\n", file_name);
             return -1;
         }
-//        time_e = MPI_Wtime();
-//        printf("%d Time to delete file: %f\n", world_rank, time_e-time_s);
 
     }
     if (n_iterations % 2 == 1 && n_iterations > 2){
@@ -882,16 +794,20 @@ int main(int argc, char* argv[]){
     int world_rank, world_size, name_length, n_files, n_iterations;
 //    char hostname[MPI_MAX_PROCESSOR_NAME];
 
+    //TODO currently segfaults if n_files%16 != 0
+    n_files = atoi(argv[1]);
+    if (n_files%16 != 0){
+        printf("Error. Currently only works with the number of files being a multiple of 16. Aborting.\n");
+        return -1;
+    }
+
+
     MPI_Init(NULL, NULL);
 
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
-//    MPI_Get_processor_name(hostname, &name_length);
 
-//    if(world_rank == 0) mtrace(); //TODO REMOVE
     double start_time, end_time;
-    //use barrier to sync times to degree possible (?)
-    //MPI_Barrier(MPI_COMM_WORLD);
     start_time = MPI_Wtime();
 
 //    printf("Hello from %s, processor %d, process: %ld\n", hostname, world_rank, (long)getpid());
@@ -902,20 +818,11 @@ int main(int argc, char* argv[]){
 
     if (world_rank < 4){ //procs 0-4 (those on pi01) deal with distributing the files
 
-        //process 0 unzips file
-/*        if(world_rank == 0){
-            if (unzip(argv[1]) == -1){
-                printf("Unzipping failed. Aborting.\n");
-                return -1;
-            }
-            n_files = countFiles("./OPS/");
-            printf("Number of files: %d\n", n_files);
-        }
-*/
-        //TODO REMOVE!!!!
-        //TODO currently segfaults if n_files%16 != 0
-        n_files = atoi(argv[1]);
-
+        /* TODO this broadcast is used because the eventual goal is to have the
+         * number of files be counted automatically, meaning only procs 0-4
+         * will actually be able to find that number and so a broadcast will be
+         * needed. For now it is supplied by command args, but this is intended
+         * to be temporary. */
         MPI_Barrier(MPI_COMM_WORLD);
         MPI_Bcast(&n_files, 1, MPI_INT, 0, MPI_COMM_WORLD);
         MPI_Barrier(MPI_COMM_WORLD);
@@ -928,9 +835,13 @@ int main(int argc, char* argv[]){
     }else{
         n_iterations = recvFileLoop(tally_t, world_rank, world_size);
     }
-//    printf("%d is beginning mergeLocal\n", world_rank);
+
+    double time_s, time_e;
+    time_s = MPI_Wtime();
     mergeLocal(world_rank, n_iterations, 0, tally_t);
-//    printf("%d finished mergeLocal\n", world_rank);
+    time_e = MPI_Wtime();
+    reduceTime(time_s, time_e, world_rank, world_size, "Merge Local Time:", 1);
+
 
     MPI_Type_free(&tally_t);
 
@@ -941,29 +852,42 @@ int main(int argc, char* argv[]){
     MPI_Barrier(MPI_COMM_WORLD);
 
     if(world_rank==0){
+        double t_s, t_e;
+        t_s = MPI_Wtime();
         finalConcat();
+        t_e = MPI_Wtime();
+        printf("Final Concat Time:%f\n",t_e-t_s);//Final Concat Time
     }
 
-    //use barrier to sync times to degree possible (?)
-    //MPI_Barrier(MPI_COMM_WORLD);
 
     end_time = MPI_Wtime();
 
-    double total_time = end_time - start_time, average_time = 0;
+    reduceTime(start_time, end_time, world_rank, world_size, "Total Time:", 1);
 
-    MPI_Reduce(&total_time, &average_time, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    if(world_rank > 0 && world_rank < 4){
+        MPI_Send(&sum_read_send_time, 1, MPI_DOUBLE, 0, 10, MPI_COMM_WORLD);
+    }
 
-    average_time = average_time / world_size;
-
-//  printf("-----Total time (proc %d): %f\n", world_rank, end_time - start_time);
-
-    if(world_rank==0) printf("%f\n", average_time);
+    if(world_rank==0){
+        double proc1_rs_time, proc2_rs_time, proc3_rs_time;
+        MPI_Recv(&proc1_rs_time, 1, MPI_DOUBLE, 1, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv(&proc2_rs_time, 1, MPI_DOUBLE, 2, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv(&proc3_rs_time, 1, MPI_DOUBLE, 3, 10, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        //the two lines below mimic the behavior of the reduce used for the other timings
+        sum_read_send_time += proc1_rs_time + proc2_rs_time + proc3_rs_time;
+        sum_read_send_time /= 4;
+        printf("Total Read and Send File Time:%f\n", sum_read_send_time);
+        printf("Avg Read and Send File Time:%f: %d\n", sum_read_send_time/n_read_send, n_read_send);
+        printf("Total Parallel Merge Time:%f\n", sum_par_merge_time);
+        printf("Avg Parallel Merge Time:%f: %d\n", sum_par_merge_time/n_par_merge, n_par_merge);
+        printf("Total Parse & Tally Time:%f\n", sum_parse_tally_time);
+        printf("Avg Parse & Tally Time:%f: %d\n", sum_parse_tally_time/n_parse_tally, n_parse_tally);
+    }
 
     MPI_Barrier(MPI_COMM_WORLD);
 
     MPI_Finalize();
 
-//    if(world_rank == 0) muntrace(); //TODO REMOVE
     return 0;
 }
 
